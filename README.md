@@ -19,3 +19,4 @@ onClick={sendMessage}
 className="bg-blue-500 px-4 rounded-r-lg"
 >Enviar</button> </div> </div> ); }
 
+
