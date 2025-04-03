@@ -194,3 +194,94 @@ app.post("/whatsapp-webhook", async (req, res) => { const { messages } = req.bod
 
 app.listen(port, () => console.log(Servidor corriendo en http://localhost:${port}));
 
+import socket
+import threading
+import json
+import bcrypt
+import sqlite3
+
+# Configurar la base de datos
+conn = sqlite3.connect("usuarios.db", check_same_thread=False)
+cursor = conn.cursor()
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS usuarios (
+        nombre TEXT PRIMARY KEY,
+        password TEXT
+    )
+""")
+conn.commit()
+
+mensajes_eliminados = {}
+
+def registrar_usuario(nombre, password):
+    cursor.execute("SELECT * FROM usuarios WHERE nombre=?", (nombre,))
+    if cursor.fetchone():
+        return False, "El usuario ya existe."
+
+    hashed_password = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    cursor.execute("INSERT INTO usuarios (nombre, password) VALUES (?, ?)", (nombre, hashed_password))
+    conn.commit()
+    return True, "Usuario registrado con éxito."
+
+def autenticar_usuario(nombre, password):
+    cursor.execute("SELECT password FROM usuarios WHERE nombre=?", (nombre,))
+    user = cursor.fetchone()
+    if user and bcrypt.checkpw(password.encode(), user[0].encode()):
+        return True, "Autenticación exitosa."
+    return False, "Usuario o contraseña incorrectos."
+
+def agregar_contacto(usuario, contacto):
+    cursor.execute("SELECT * FROM usuarios WHERE nombre=?", (contacto,))
+    if cursor.fetchone():
+        return True, f"{contacto} añadido a tu lista de contactos."
+    return False, "El contacto no existe."
+
+def ver_mensajes_eliminados(usuario):
+    return mensajes_eliminados.get(usuario, [])
+
+def manejar_cliente(cliente_socket, direccion):
+    try:
+        while True:
+            mensaje = cliente_socket.recv(1024).decode("utf-8")
+            if not mensaje:
+                break
+
+            datos = json.loads(mensaje)
+            tipo = datos.get("tipo")
+            usuario = datos.get("usuario")
+
+            if tipo == "registrar":
+                exito, respuesta = registrar_usuario(usuario, datos.get("password"))
+            elif tipo == "autenticar":
+                exito, respuesta = autenticar_usuario(usuario, datos.get("password"))
+            elif tipo == "agregar_contacto":
+                exito, respuesta = agregar_contacto(usuario, datos.get("contacto"))
+            elif tipo == "ver_mensajes_eliminados":
+                respuesta = ver_mensajes_eliminados(usuario)
+                exito = True
+            else:
+                exito, respuesta = False, "Acción desconocida."
+
+            cliente_socket.send(json.dumps({"exito": exito, "respuesta": respuesta}).encode("utf-8"))
+    except Exception as e:
+        print(f"Error con el cliente {direccion}: {e}")
+    finally:
+        cliente_socket.close()
+
+def iniciar_servidor(puerto=12345):
+    try:
+        servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        servidor.bind(("0.0.0.0", puerto))
+        servidor.listen(5)
+        print(f"Servidor escuchando en el puerto {puerto}")
+
+        while True:
+            cliente_socket, direccion = servidor.accept()
+            print(f"Conexión entrante de {direccion}")
+            hilo_cliente = threading.Thread(target=manejar_cliente, args=(cliente_socket, direccion))
+            hilo_cliente.start()
+    except Exception as e:
+        print(f"Error en el servidor: {e}")
+
+if __name__ == "__main__":
+    iniciar_servidor()
